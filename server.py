@@ -1,14 +1,4 @@
-"""Flask 애플리케이션 예제 모듈."""
-
-from flask import Flask
-
-app = Flask(__name__)
-
-
-@app.route("/")
-def hello_world():
-    return "Hello, World!"
-
+import uvicorn
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    uvicorn.run("app.main:app", host="localhost", port=8000, reload=True)

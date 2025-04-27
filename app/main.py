@@ -1,27 +1,71 @@
-from fastapi import FastAPI
-from fastapi.templating import Jinja2Templates
-from pathlib import Path
 from contextlib import asynccontextmanager
-from motor.motor_asyncio import AsyncIOMotorClient
-from odmantic import AIOEngine
-from app.config import MONGO_URL, MONGO_DB_NAME
+from app.book_scraper import NaverBookScraper
+from fastapi import FastAPI, Request, Form
+from fastapi.templating import Jinja2Templates
+from fastapi.responses import HTMLResponse
+from pathlib import Path
+from app.models import mongodb
+from app.models.book import BookModel
 
 BASE_DIR = Path(__file__).resolve().parent
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # MongoDB 연결 설정
-
-    app.mongodb_client = AsyncIOMotorClient(MONGO_URL)
-    app.mongodb = app.mongodb_client[MONGO_DB_NAME]
-    print("MongoDB 연결 성공")
-    yield
-    # 종료 시 실행
-    # 여기에 on_app_shutdown 함수의 내용을 넣습니다
-    print("MongoDB 연결 종료")
-    app.mongodb_client.close()
+    mongodb.connect()
+    try:
+        yield
+    finally:
+        mongodb.close()
 
 
 app = FastAPI(lifespan=lifespan)
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
+
+
+@app.get("/", response_class=HTMLResponse)
+async def root(request: Request):
+    # 🔥 검색 결과 없이 검색창만 보여주기 위해 books=None 넘기기
+    return templates.TemplateResponse(
+        "item.html",
+        {
+            "request": request,
+            "title": "콜렉터 북이",
+            "books": None,
+        },
+    )
+
+
+@app.get("/search", response_class=HTMLResponse)
+async def search(request: Request, q: str):
+    keyword = q
+
+    if not keyword:
+        context = {
+            "request": request,
+            "title": "북북이",
+        }
+        return templates.TemplateResponse("item.html", context)
+
+    if await mongodb.engine.find_one(BookModel, BookModel.keyword == keyword):
+        books = await mongodb.engine.find(BookModel, BookModel.keyword == keyword)
+        return templates.TemplateResponse(
+            "item.html", {"request": request, "title": "북북이", "books": books}
+        )
+
+    naver_book_scraper = NaverBookScraper()
+    books = await naver_book_scraper.search(keyword, total_page=10)
+    book_models = []
+    for book in books:
+        book_model = BookModel(
+            keyword=keyword,
+            publisher=book["publisher"],
+            price=book["discount"],
+            image=book["image"],
+            description=book["description"],
+        )
+        book_models.append(book_model)
+    await mongodb.engine.save_all(book_models)
+    return templates.TemplateResponse(
+        "item.html", {"request": request, "title": "북북이", "books": books}
+    )
